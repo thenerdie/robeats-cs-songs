@@ -1,6 +1,7 @@
 -- Build script that compiles and publishes songs in the song folder to Roblox
 
 local remodel = require("remodel.luau")
+local serpent = require("serpent.luau")
 
 local fs = require("@lune/fs")
 local serde = require("@lune/serde")
@@ -12,7 +13,9 @@ local env = {}
 for _, line in fs.readFile(".env"):split("\n") do
     local k, v = string.match(line, "([^=]+)=([^=]+)")
 
-    env[k] = if tonumber(v) then tonumber(v) else v
+    if k and v then
+        env[k] = if tonumber(v) then tonumber(v) else v
+    end
 end
 
 function splitStringIntoChunks(inputString, chunkSize)
@@ -35,45 +38,60 @@ local function generateModelFile()
     local songs = Instance.new("Model")
     songs.Name = "Songs"
 
+    local hitObjectsFolder = Instance.new("Folder")
+    hitObjectsFolder.Name = "HitObjects"
+    hitObjectsFolder.Parent = songs
+    
+    local metadataOut = {}
+    local difficultiesOut = {}
+
     for i, songFolder in songsDir do
-        local success = pcall(function()
+        local success, err = pcall(function()
             local METADATA_FILE = "metadata.yml"
             local HIT_OBJECTS_FILE = "objects.yml"
 
             local metadata = serde.decode("yaml", fs.readFile(BASE_DIR .. "/" .. songFolder .. "/" .. METADATA_FILE))
             local hitObjects = serde.decode("yaml", fs.readFile(BASE_DIR .. "/" .. songFolder .. "/" .. HIT_OBJECTS_FILE))
 
-            local songInstance = Instance.new("Folder")
-            songInstance.Name = songFolder
-
-            local metadataValue = Instance.new("StringValue")
-            metadataValue.Name = "Metadata"
-            metadataValue.Value = serde.encode("json", metadata)
-
             local hitObjectsInstance = Instance.new("Folder")
-            hitObjectsInstance.Name = "HitObjects"
+            hitObjectsInstance.Name = songFolder
 
             local jsonString = serde.encode("json", hitObjects)
 
             for i, chunk in splitStringIntoChunks(jsonString, 200000) do
                 local chunkInstance = Instance.new("StringValue")
+
                 chunkInstance.Name = i
                 chunkInstance.Value = chunk
                 chunkInstance.Parent = hitObjectsInstance
             end
 
-            hitObjectsInstance.Parent = songInstance
-            metadataValue.Parent = songInstance
+            hitObjectsInstance.Parent = hitObjectsFolder
 
-            songInstance.Parent = songs
+            metadata.HitObjectsDirectory = songFolder
+
+            difficultiesOut[metadata.MD5Hash] = metadata.Difficulty
+            metadata.Difficulty = nil
+            
+            table.insert(metadataOut, metadata)
         end)
 
         if success then
             print("Song " .. i .. " of " .. #songsDir .. " built")
         else
-            print("Building \"" .. songFolder .. "\" failed")
+            print("Building \"" .. songFolder .. "\" failed: " .. tostring(err))
         end
     end
+
+    local metadataFile = Instance.new("ModuleScript")
+    metadataFile.Name = "Metadata"
+    metadataFile.Source = "return " .. serpent.block(metadataOut)
+    metadataFile.Parent = songs
+
+    local difficultyFile = Instance.new("ModuleScript")
+    difficultyFile.Name = "Difficulties"
+    difficultyFile.Source = "return " .. serpent.block(difficultiesOut)
+    difficultyFile.Parent = songs
 
     local model = roblox.serializeModel({ songs })
 
